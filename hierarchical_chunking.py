@@ -16,11 +16,13 @@ SectionSpan = Tuple[int, int, str]
 _SENT_RE = re.compile(r"[^.!?]+[.!?]+")
 
 
+# Create stable, filesystem/identifier-friendly labels for chunk ids.
 def _clean_label(label: str, *, max_len: int) -> str:
     cleaned = (label or "section").strip().replace(" ", "_")
     return cleaned[:max_len] if max_len > 0 else cleaned
 
 
+# Heuristically find numbered section headings and return their spans.
 def section_chunks(text: str, *, max_top: int = 12) -> List[SectionSpan]:
     """Split a paper-like document into section spans using numbered headings.
 
@@ -78,6 +80,7 @@ def section_chunks(text: str, *, max_top: int = 12) -> List[SectionSpan]:
     return spans
 
 
+# Fast heuristic sentence span detection within a section span (global offsets).
 def _sentence_spans_global(text: str, start: int, end: int) -> List[Tuple[int, int]]:
     """Return sentence spans (global offsets) inside [start, end).
 
@@ -115,6 +118,7 @@ def _sentence_spans_global(text: str, start: int, end: int) -> List[Tuple[int, i
     return out
 
 
+# Chunk each detected section into overlapping windows of sentences.
 def hierarchical_sentence_chunks(
     text: str,
     section_spans: Sequence[SectionSpan],
@@ -175,6 +179,7 @@ def hierarchical_sentence_chunks(
     return spans
 
 
+# Extract linearized text from a PDF for sentence-based chunking.
 def _load_text_from_pdf(pdf_path: str) -> str:
     try:
         import fitz  # type: ignore
@@ -188,6 +193,7 @@ def _load_text_from_pdf(pdf_path: str) -> str:
     return re.sub(r"\s+", " ", "\n".join(pages)).strip()
 
 
+# Extract layout-aware paragraph-like blocks and reconstruct text with "\n\n".
 def _load_paragraph_text_from_pdf(pdf_path: str) -> Tuple[str, List[Tuple[int, int]]]:
     """Extract paragraph-like blocks using PDF layout.
 
@@ -233,6 +239,7 @@ def _load_paragraph_text_from_pdf(pdf_path: str) -> Tuple[str, List[Tuple[int, i
     return "".join(parts), spans
 
 
+# Chunk each detected section into overlapping windows of PDF paragraph blocks.
 def hierarchical_paragraph_chunks(
     text: str,
     section_spans: Sequence[SectionSpan],
@@ -290,6 +297,7 @@ def hierarchical_paragraph_chunks(
     return spans
 
 
+# Download a PDF with better SSL handling (certifi if available).
 def _download_pdf(url: str, dest_path: str, *, insecure: bool = False) -> None:
     req = urllib.request.Request(
         url,
@@ -336,6 +344,7 @@ def _download_pdf(url: str, dest_path: str, *, insecure: bool = False) -> None:
         ) from e
 
 
+# CLI entrypoint.
 def _main(argv: List[str]) -> int:
     p = argparse.ArgumentParser(
         description="Hierarchical chunking demo (section -> paragraphs or sentence groups)."

@@ -3,9 +3,9 @@
 Tiny demo of **hierarchical chunking for academic PDFs**:
 
 - **Layer 1**: split extracted text into **section spans** using numbered headings (e.g. `1 Introduction`, `3.2 Attention`, `3.2.1 ...`)
-- **Layer 2**: within each section, split into **overlapping groups of sentences**
+- **Layer 2**: within each section, split into **overlapping groups of paragraphs** (recommended) or **sentence groups**
 
-It’s intentionally heuristic (regex-based headings + sentence splitting), but works well for many papers after PDF text extraction.
+It’s intentionally heuristic (regex-based headings + PDF block / sentence splitting), but works well for many papers after PDF text extraction.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ It’s intentionally heuristic (regex-based headings + sentence splitting), but 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install pymupdf
+pip install -r requirements.txt
 ```
 
 ## Usage (CLI)
@@ -53,10 +53,17 @@ Tune chunking:
 ```bash
 python3 hierarchical_chunking.py \
   --pdf path/to/paper.pdf \
+  --unit paragraph \
   --group-size 10 \
   --overlap 2 \
   --max-top 12 \
   --preview 5
+```
+
+Choose sentence-group chunking (previous behavior):
+
+```bash
+python3 hierarchical_chunking.py --pdf path/to/paper.pdf --unit sentence
 ```
 
 ### Output format
@@ -65,6 +72,8 @@ The script prints a short summary and then previews the first `--preview` chunks
 
 - `[{start}:{end}] {label}`: character offsets into the extracted text
 - a ~160 character snippet from that span
+
+In `--unit paragraph` mode, the “extracted text” is a reconstructed string made by joining PDF paragraph blocks with `\n\n`.
 
 Labels look like:
 
@@ -76,6 +85,7 @@ The core functions are:
 
 - `section_chunks(text, max_top=12)` → `[(start, end, label), ...]`
 - `hierarchical_sentence_chunks(text, section_spans, group_size=10, overlap=2, label_max_len=30)` → `[(start, end, label), ...]`
+- `hierarchical_paragraph_chunks(text, section_spans, paragraph_spans, group_size=10, overlap=2, label_max_len=30)` → `[(start, end, label), ...]`
 
 Example:
 
@@ -92,6 +102,8 @@ for s, e, label in spans[:3]:
 
 ## Notes / limitations
 
-- **PDF extraction quality matters**: this uses PyMuPDF’s `page.get_text()` and then normalizes whitespace.
+- **PDF extraction quality matters**:
+  - sentence mode uses `page.get_text()` and normalizes whitespace
+  - paragraph mode uses `page.get_text("blocks")` and treats blocks as paragraph-like units
 - **Sentence splitting is heuristic**: a simple regex (`.!?`) splitter; abbreviations and references may confuse it.
 - **Heading detection is heuristic**: it looks for numbered headings and filters out common false-positives (Figure/Table/etc).

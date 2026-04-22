@@ -1,109 +1,137 @@
 # hierarchical-chunking
 
-Tiny demo of **hierarchical chunking for academic PDFs**:
+Small **PDF → outline-linked chunks** pipeline for RAG: one pass over the document, parent/child links between sections, and a ready-made `retrieval_text` field per chunk.
 
-- **Layer 1**: split extracted text into **section spans** using numbered headings (e.g. `1 Introduction`, `3.2 Attention`, `3.2.1 ...`)
-- **Layer 2**: within each section, split into **overlapping groups of paragraphs** (recommended) or **sentence groups**
+Extraction uses **[pdfplumber](https://github.com/jsvine/pdfplumber)** (word-level geometry, font size, bold). Heading detection is heuristic, not perfect on every layout.
 
-It’s intentionally heuristic (regex-based headings + PDF block / sentence splitting), but works well for many papers after PDF text extraction.
+## What it does
+
+1. **Stream** each page into visual lines (words grouped by baseline; large vertical gaps become paragraph separators).
+2. **Guess titles** in a fixed order: numbered outline (`1`, `3.2`, `A.1`, …) → larger-than-body font → short ALL CAPS (with a space) → short bold line.
+3. **Attach body text** to the current section (or to a leading `para_*` block before the first real heading).
+4. **Emit JSON** with `parent_id` / `children_ids`, plus `parent_context` and `retrieval_text` for embedding.
+
+Tuning knobs live in **`PipelineThresholds`** (`pdf_rag_pipeline.py`): word clustering, paragraph gap ratio, heading font delta, title line length cap, orphan preview words, parent snippet length. Replace the module-level **`THRESHOLDS`** instance if your PDFs need different defaults.
 
 ## Requirements
 
 - Python 3.9+
-- PyMuPDF (for PDF text extraction)
 
 ## Install
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Usage (CLI)
-
-Run on a local PDF:
+## CLI
 
 ```bash
-python3 hierarchical_chunking.py --pdf path/to/paper.pdf
+python3 hierarchical_chunking.py path/to/paper.pdf
 ```
 
-Run on a PDF URL (downloaded to `--cache` if missing):
+Writes **`{YYYYMMDD_HHMMSS}_chunks.json`** next to the PDF (resolved path) and prints outline reports to stdout.
+
+Explicit output path:
 
 ```bash
-python3 hierarchical_chunking.py \
-  --url "https://arxiv.org/pdf/1706.03762.pdf" \
-  --cache paper.pdf
+python3 hierarchical_chunking.py path/to/paper.pdf ./out/chunks.json
 ```
 
-If you hit `SSL: CERTIFICATE_VERIFY_FAILED` on macOS, install a CA bundle and retry:
+## Output (JSON)
 
-```bash
-pip install certifi
+Each element is one chunk: section headings and body spans share the same schema; leading material before the first numbered heading often appears as `para_*` chunks.
+
+```json
+{
+  "chunk_id": "sec_3_2_1",
+  "section_number": "3.2.1",
+  "heading": "Scaled Dot-Product Attention",
+  "content": "… body text …",
+  "level": 3,
+  "page": 5,
+  "parent_id": "sec_3_2",
+  "children_ids": [],
+  "parent_context": "[3.2: Attention] First ~400 chars of parent body…",
+  "retrieval_text": "3.2.1 Scaled Dot-Product Attention\n… body text …"
+}
 ```
 
-As a last resort (not recommended), you can bypass certificate verification:
+- **`chunk_id`**: stable id (`sec_*` for numbered sections, `heading_*` for synthetic `H1`-style labels, `para_*` for floating preface blocks).
+- **`parent_context`**: short parent excerpt for retrieval; empty if there is no parent.
+- **`retrieval_text`**: single string meant to be embedded (section label + heading + content).
 
-```bash
-python3 hierarchical_chunking.py --url "https://..." --cache paper.pdf --insecure
-```
+## Python API
 
-Tune chunking:
-
-```bash
-python3 hierarchical_chunking.py \
-  --pdf path/to/paper.pdf \
-  --unit paragraph \
-  --group-size 10 \
-  --overlap 2 \
-  --max-top 12 \
-  --preview 5
-```
-
-Choose sentence-group chunking (previous behavior):
-
-```bash
-python3 hierarchical_chunking.py --pdf path/to/paper.pdf --unit sentence
-```
-
-### Output format
-
-The script prints a short summary and then previews the first `--preview` chunks:
-
-- `[{start}:{end}] {label}`: character offsets into the extracted text
-- a ~160 character snippet from that span
-
-In `--unit paragraph` mode, the “extracted text” is a reconstructed string made by joining PDF paragraph blocks with `\n\n`.
-
-Labels look like:
-
-`sec_02__chunk_003__3.2.1_Scaled_Dot-Product_Att`
-
-## Usage (Python API)
-
-The core functions are:
-
-- `section_chunks(text, max_top=12)` → `[(start, end, label), ...]`
-- `hierarchical_sentence_chunks(text, section_spans, group_size=10, overlap=2, label_max_len=30)` → `[(start, end, label), ...]`
-- `hierarchical_paragraph_chunks(text, section_spans, paragraph_spans, group_size=10, overlap=2, label_max_len=30)` → `[(start, end, label), ...]`
-
-Example:
+**Facade** (`hierarchical_chunking.py`):
 
 ```python
-from hierarchical_chunking import section_chunks, hierarchical_sentence_chunks
+from hierarchical_chunking import (
+    chunk_pdf_for_rag,
+    default_export_path,
+    materialize_chunks,
+    rag_record_for,
+)
 
-text = "1 Introduction ... 2 Methods ... (etc)"
-secs = section_chunks(text, max_top=12)
-spans = hierarchical_sentence_chunks(text, secs, group_size=10, overlap=2)
-
-for s, e, label in spans[:3]:
-    print(label, repr(text[s:e][:80]))
+records = chunk_pdf_for_rag("paper.pdf", export_json_path=None)  # no file if path is None
+nodes = materialize_chunks("paper.pdf")
+vault = {c.chunk_id: c for c in nodes}
+row = rag_record_for(nodes[0], vault)
 ```
 
-## Notes / limitations
+**Tuning** (optional):
 
-- **PDF extraction quality matters**:
-  - sentence mode uses `page.get_text()` and normalizes whitespace
-  - paragraph mode uses `page.get_text("blocks")` and treats blocks as paragraph-like units
-- **Sentence splitting is heuristic**: a simple regex (`.!?`) splitter; abbreviations and references may confuse it.
-- **Heading detection is heuristic**: it looks for numbered headings and filters out common false-positives (Figure/Table/etc).
+```python
+import pdf_rag_pipeline as prp
+
+prp.THRESHOLDS = prp.PipelineThresholds(
+    word_cluster_pt=2.5,
+    paragraph_gap_ratio=0.85,
+    heading_font_above_body_pt=0.5,
+)
+```
+
+**Pipeline module** (`pdf_rag_pipeline.py`): `TextRow`, `Chunk`, `stream_rows_from_pdf`, `font_size_ranks`, `emit_branch_report`, etc. Older names are still available as aliases (`assemble_chunks`, `build_rag_payload`, `print_parent_children`, …).
+
+## Project layout
+
+| File                       | Role                                           |
+| -------------------------- | ---------------------------------------------- |
+| `hierarchical_chunking.py` | CLI, JSON export, re-exports                   |
+| `pdf_rag_pipeline.py`      | Extraction, outline logic, reports, thresholds |
+
+## Future scope
+
+Possible directions that fit this codebase without throwing away the current pipeline:
+
+**Layout and extraction**
+
+- **Two-column and reading order**: column detection, left-then-right or block-ordered text so headings and body stay aligned.
+- **Second backend** (e.g. PyMuPDF): optional fast path or block-based paragraphs; compare or merge with pdfplumber output.
+- **Noise masks**: skip or tag headers/footers, page numbers, and repeated running titles using position or repetition heuristics.
+- **Figures and tables**: detect captions (`Figure 3`, `Table 2`) and emit separate chunks or metadata pointers instead of mixing them into body text.
+- **Scanned PDFs**: optional OCR path when extracted text is empty or too short.
+
+**Chunking and RAG output**
+
+- **Within-section splitting**: max token/character targets, sliding windows, or sentence/paragraph grouping _under_ each heading so long sections become multiple retrievable units.
+- **Richer graph fields**: explicit `breadcrumb` (ancestor titles), `sibling_ids`, page ranges, or confidence scores for heading guesses.
+- **Configurable `retrieval_text`**: templates (e.g. include only title path vs full parent chain) for different embedding models.
+
+**CLI and configuration**
+
+- **`argparse`**: PDF path, output path, `--quiet`, optional `--config` YAML/TOML mapping to `PipelineThresholds`.
+- **Batch mode**: directory of PDFs → one JSONL or one folder of JSON files.
+- **Optional download**: `--url` + cache path (with clear SSL/docs), if you want parity with ad-hoc `curl` workflows.
+
+**Quality and maintenance**
+
+- **Golden tests**: small fixture PDFs (or snapshots of `materialize_chunks` output) to lock heading and parent/child behavior when thresholds change.
+- **Lint rules for chunks**: flag overlong sections, empty parents, or suspicious `para_*` volume for manual review.
+
+## Limitations
+
+- **Layout-dependent**: two-column papers, equations, and footnotes can confuse line grouping and title rules.
+- **No URL download** in the current CLI (use `curl`/`wget` and pass a local path).
+- **Heuristic headings**: false positives/negatives happen; adjust **`THRESHOLDS`** or post-filter chunks for production.

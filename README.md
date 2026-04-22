@@ -11,7 +11,9 @@ Extraction uses **[pdfplumber](https://github.com/jsvine/pdfplumber)** (word-lev
 3. **Attach body text** to the current section (or to a leading `para_*` block before the first real heading).
 4. **Emit JSON** with `parent_id` / `children_ids`, plus `parent_context` and `retrieval_text` for embedding.
 
-Tuning knobs live in **`PipelineThresholds`** (`pdf_rag_pipeline.py`): word clustering, paragraph gap ratio, heading font delta, title line length cap, orphan preview words, parent snippet length. Replace the module-level **`THRESHOLDS`** instance if your PDFs need different defaults.
+**Outline depth** is capped at **two tiers** by default (`level` 1 = top heading, `level` 2 = subsection under it). Deeper PDF numbering (e.g. `3.2.1`) still gets its own chunk, but its parent becomes the **current top section** (e.g. `3`), not `3.2`—so the linked tree matches common two-level RAG practice. Raise **`PipelineThresholds.max_outline_depth`** (e.g. to `3`) if you want deeper parent chains.
+
+Tuning knobs live in **`PipelineThresholds`** (`pdf_rag_pipeline.py`): word clustering, paragraph gap ratio, heading font delta, title line length cap, orphan preview words, parent snippet length, outline depth. Replace the module-level **`THRESHOLDS`** instance if your PDFs need different defaults.
 
 ## Requirements
 
@@ -89,6 +91,7 @@ prp.THRESHOLDS = prp.PipelineThresholds(
     word_cluster_pt=2.5,
     paragraph_gap_ratio=0.85,
     heading_font_above_body_pt=0.5,
+    max_outline_depth=3,
 )
 ```
 

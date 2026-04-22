@@ -35,6 +35,10 @@ class PipelineThresholds:
       leading para_* chunks before the first real section.
     - parent_snippet_max_chars: 256–800 — parent_context prefix for RAG; raise if
       your embedder context is large and you want more hierarchy signal.
+    - max_outline_depth: 2 by default — caps outline tiers for parent/child links and
+      stored `level` (1 = top heading, 2 = under that). Deeper headings (e.g. 3.2.1)
+      attach to the current top section instead of nesting further. Set to 3+ to
+      allow deeper trees. `para_*` chunks stay level 0.
     """
 
     word_cluster_pt: float = 3.5
@@ -43,6 +47,7 @@ class PipelineThresholds:
     max_title_candidate_chars: int = 120
     orphan_heading_word_count: int = 5
     parent_snippet_max_chars: int = 256
+    max_outline_depth: int = 2
 
 
 # Override in your app or notebook, e.g. `THRESHOLDS = PipelineThresholds(...)`.
@@ -276,6 +281,8 @@ class OutlineDraft:
         depth: int,
         page_number: int,
     ) -> str:
+        cap = max(1, THRESHOLDS.max_outline_depth)
+        depth = max(1, min(int(depth), cap))
         cid = chunk_primary_key(section_token)
         parent = self.pop_ancestry_until(depth)
         self.nodes[cid] = Chunk(
